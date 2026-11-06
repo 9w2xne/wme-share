@@ -1,135 +1,20 @@
-# Simple workflow for deploying static content to GitHub Pages
 name: Deploy static content to Pages
 
 on:
-  # Runs on pushes targeting the default branch
   push:
     branches: ["main"]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
   pages: write
-  id-token: write<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Open location in any app</title>
-<meta property="og:title" content="📍 Location – open in any map app">
-<meta property="og:description" content="Tap to open in Google Maps, Waze, Apple Maps or OpenStreetMap and start a route.">
-<style>
-  :root{--bg:#f4f6f8;--card:#fff;--text:#1f2937;--sub:#5b6673;--line:#e3e8ee;--blue:#1976d2}
-  @media (prefers-color-scheme:dark){:root{--bg:#12161b;--card:#1b2128;--text:#e8eaed;--sub:#aab4c0;--line:#2c353f;--blue:#64b5f6}}
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;justify-content:center;padding:16px}
-  main{width:100%;max-width:440px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 4px 18px rgba(0,0,0,.08)}
-  h1{font-size:18px;margin:0 0 2px}
-  .coords{font:600 15px ui-monospace,Menlo,Consolas,monospace;color:var(--sub);word-break:break-all}
-  iframe{width:100%;height:190px;border:1px solid var(--line);border-radius:12px;margin:12px 0}
-  a.btn,button.btn{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;margin:8px 0 0;padding:0 14px;border-radius:12px;border:1px solid var(--line);
-    background:var(--card);color:var(--text);font:600 16px system-ui,sans-serif;text-decoration:none;cursor:pointer}
-  a.btn.rec{background:var(--blue);border-color:var(--blue);color:#fff}
-  a.btn small,button.btn small{margin-left:auto;font-weight:400;opacity:.75;font-size:12px}
-  .emoji{font-size:20px;width:26px;text-align:center}
-  p.note{font-size:12px;color:var(--sub);margin:12px 0 0;text-align:center}
-  .err{color:#c62828;font-weight:600}
-</style>
-</head>
-<body>
-<main>
-  <div class="card" id="app"><h1>Loading…</h1></div>
-  <p class="note">Tip: add <b>&amp;go=waze</b> (or google, apple, osm) to the link to open that app automatically.</p>
-</main>
-<script>
-(function () {
-  'use strict';
-  var app = document.getElementById('app');
-  var p = new URLSearchParams(location.search);
+  id-token: write
 
-  // accepted formats:  ?c=LAT,LON   or   ?lat=LAT&lon=LON   (optional: n=name, z=zoom, go=waze|google|apple|osm)
-  var lat, lon, c = (p.get('c') || '').split(',');
-  if (c.length === 2) { lat = parseFloat(c[0]); lon = parseFloat(c[1]); }
-  else { lat = parseFloat(p.get('lat')); lon = parseFloat(p.get('lon') || p.get('lng')); }
-
-  var valid = isFinite(lat) && isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
-  if (!valid) {
-    app.innerHTML = '';
-    var h = document.createElement('h1'); h.className = 'err'; h.textContent = 'No valid coordinates in this link';
-    var s = document.createElement('div'); s.className = 'coords'; s.textContent = 'Expected: ?c=43.6107,3.8767';
-    app.appendChild(h); app.appendChild(s);
-    return;
-  }
-
-  var fix = function (x) { return x.toFixed(6).replace(/0+$/, '').replace(/\.$/, ''); };
-  var ll = fix(lat) + ',' + fix(lon);
-  var name = (p.get('n') || '').slice(0, 80);
-  document.title = '📍 ' + (name || ll);
-
-  var ua = navigator.userAgent || '';
-  var isIOS = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-  var isAndroid = /Android/.test(ua);
-
-  var links = {
-    google: { emoji: '🗺', label: 'Google Maps', sub: 'route', url: 'https://www.google.com/maps/dir/?api=1&destination=' + ll + '&travelmode=driving' },
-    waze:   { emoji: '🔵', label: 'Waze', sub: 'navigate', url: 'https://waze.com/ul?ll=' + ll + '&navigate=yes' },
-    apple:  { emoji: '🍎', label: 'Apple Maps', sub: 'route', url: 'https://maps.apple.com/?daddr=' + ll + '&dirflg=d' },
-    osm:    { emoji: '🌍', label: 'OpenStreetMap', sub: 'view', url: 'https://www.openstreetmap.org/?mlat=' + fix(lat) + '&mlon=' + fix(lon) + '#map=17/' + fix(lat) + '/' + fix(lon) }
-  };
-  if (isAndroid) links.geo = { emoji: '📱', label: 'Default map app', sub: 'geo:', url: 'geo:' + ll + '?q=' + ll };
-
-  // optional auto-open
-  var go = p.get('go');
-  if (go && links[go]) { location.href = links[go].url; }
-
-  // order: platform favourite first
-  var order = isIOS ? ['apple', 'google', 'waze', 'osm'] : isAndroid ? ['geo', 'google', 'waze', 'osm', 'apple'] : ['google', 'waze', 'osm', 'apple'];
-
-  app.innerHTML = '';
-  var h1 = document.createElement('h1'); h1.textContent = '📍 ' + (name || 'Location'); app.appendChild(h1);
-  var cd = document.createElement('div'); cd.className = 'coords'; cd.textContent = fix(lat) + ', ' + fix(lon); app.appendChild(cd);
-
-  var d = 0.005, f = document.createElement('iframe');
-  f.title = 'Map preview'; f.loading = 'lazy'; f.referrerPolicy = 'no-referrer';
-  f.src = 'https://www.openstreetmap.org/export/embed.html?bbox=' + [lon - d, lat - d, lon + d, lat + d].join(',') + '&layer=mapnik&marker=' + lat + ',' + lon;
-  app.appendChild(f);
-
-  order.forEach(function (k, i) {
-    var l = links[k]; if (!l) return;
-    var a = document.createElement('a');
-    a.className = 'btn' + (i === 0 ? ' rec' : ''); a.href = l.url; a.rel = 'noopener';
-    var e = document.createElement('span'); e.className = 'emoji'; e.textContent = l.emoji;
-    var t = document.createElement('span'); t.textContent = l.label;
-    var s = document.createElement('small'); s.textContent = l.sub;
-    a.appendChild(e); a.appendChild(t); a.appendChild(s);
-    app.appendChild(a);
-  });
-
-  var cp = document.createElement('button'); cp.className = 'btn'; cp.type = 'button';
-  cp.innerHTML = '<span class="emoji">📋</span><span>Copy coordinates</span>';
-  cp.onclick = function () {
-    var done = function () { cp.lastChild.textContent = 'Copied ✓'; setTimeout(function () { cp.lastChild.textContent = 'Copy coordinates'; }, 1500); };
-    if (navigator.clipboard) navigator.clipboard.writeText(ll).then(done, function () { window.prompt('Copy:', ll); });
-    else window.prompt('Copy:', ll);
-  };
-  app.appendChild(cp);
-})();
-</script>
-</body>
-</html>
-
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
-  # Single deploy job since we're just deploying
   deploy:
     environment:
       name: github-pages
@@ -143,8 +28,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload entire repository
           path: '.'
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v4
