@@ -1,54 +1,73 @@
 # WME Smart Search
 
-WME Smart Search is a userscript designed for the Waze Map Editor (WME) that enhances the default search box. 
+WME Smart Search is a userscript for the Waze Map Editor (WME) that enhances the default search box.
 
-By default, the WME search box only handles basic text searches. This script intercepts user input to support a wide variety of map links, coordinate formats, and location codes. When a valid format is detected, the script centers the map on the location and drops a temporary marker to indicate the parsed destination.
+By default, the WME search box only handles plain text searches. This script watches what you paste or type into it and, when it recognises coordinates, a Plus Code or a map link, it centers the map there and drops a red marker on the spot. Anything it doesn't recognise goes to the normal WME search as usual.
 
 ## Features
 
-- **Multiple Coordinate Formats:** Supports standard decimal (`1.234, 5.678`), Hemisphere letters (`N 1.234 W 5.678`), and DMS (`1°14'02.4"N 5°40'40.8"W`).
-- **Plus Codes:** Paste a Google Plus Code (e.g., `6PH57VP3+PR`) and the script will decode it locally.
-- **Short Link Resolution:** Automatically follows shortened URLs from Google Maps (`goo.gl`) and Apple Maps to find the hidden coordinates.
-- **Multi-Platform URL Support:** Extracts coordinates from links pointing to Google Maps, Apple Maps, Waze, OpenStreetMap, Bing, Yandex, or HERE.
-- **Ambiguous Coordinate Swapping:** If you input coordinates without cardinal directions (e.g., `1.23, 4.56`) and the map centers on the wrong spot, press `Shift+Enter` to swap the latitude and longitude.
-- **Autofill Protection:** Built-in safeguards prevent the script from accidentally triggering on standard text inputs, usernames, or passwords.
+- **Coordinate formats:** decimal (`1.3521, 103.8198`), hemisphere letters (`N 1.3521, E 103.8198`) and DMS (`1°21'07.6"N 103°49'11.3"E`). Decimal commas (`1,3521; 103,8198`) and `O` for West are also accepted.
+- **Plus Codes:** full codes (`6PH57VP3+PR`) are decoded locally. Short codes (`57VP3+PR`) are resolved relative to the current map center.
+- **Short link resolution:** follows `maps.app.goo.gl`, `goo.gl`, `g.co` and `maps.apple` short links to find the coordinates.
+- **Map URL support:** extracts coordinates from Google Maps, Apple Maps, OpenStreetMap, Bing, Yandex and HERE links, `geo:` URIs, and any link carrying `ll=`, `q=`, `lat`/`lon` style parameters (this includes Waze Live Map and WME permalinks). A link buried in other pasted text is found too.
+- **Ambiguous coordinate swapping:** if you enter two numbers without hemisphere letters or signs (e.g. `1.23, 4.56`), press `Shift+Enter` to read them as `lon, lat` instead of `lat, lon`.
+- **Leaves normal searches alone:** only the WME search box is hooked. Text with spaces and no digits is ignored, and anything that isn't recognised falls through to the regular WME search.
 
 ## Installation
 
 1. Install a userscript manager for your browser:
-   - [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Edge, Safari, Firefox)
+   - [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Edge, Firefox, Safari)
    - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Edge, Firefox)
-   - [Greasemonkey](https://addons.mozilla.org/en-US/firefox/addon/greasemonkey/) (Firefox)
-2. **[Click here to install WME Smart Search](https://raw.githubusercontent.com/9w2xne/wme-share/main/wme-smart-search.user.js)** 
-   *(Note: Ensure this URL matches your repository branch and file name)*.
+
+   *Recent versions of Chrome and Edge may require you to enable user scripts for the extension (the "Allow User Scripts" toggle, or Developer mode) before scripts will run. Your userscript manager's page explains this.*
+2. **[Click here to install WME Smart Search](https://raw.githubusercontent.com/9w2xne/wme-share/main/wme-smart-search.user.js)**
 3. Your userscript manager will prompt you to install the script. Click **Install**.
+4. Reload WME. The browser console will show `[WSS] ready` once the script has loaded.
+
+The script runs on `waze.com/editor` and `beta.waze.com/editor`. Greasemonkey is not supported.
 
 ## Usage
 
-The script integrates directly into the existing Waze search box. No additional buttons or menus are added.
+No buttons or menus are added. The script works inside the existing search box.
 
-**Method 1: Paste and Go**
-Paste any supported format or map URL directly into the search box. The script will automatically parse the input, move the map, and drop a red marker.
+**Paste and go**
+Paste any supported format or map URL into the search box. The map moves immediately and a red marker is dropped.
 
-**Method 2: Type and Press Enter**
-Type or paste your coordinates and press `Enter`.
+**Type and press Enter**
+Type your coordinates and press `Enter`.
 
-**Method 3: The Swap Trick**
-If you enter coordinates without N/S/E/W letters, the script must guess the order. If it guesses incorrectly, simply press `Shift+Enter` to swap the latitude and longitude instantly.
+**Swapping latitude and longitude**
+Without N/S/E/W letters or minus signs the script assumes `lat, lon`. If the map lands in the wrong place, type the pair into the search box again and press `Shift+Enter` to use the `lon, lat` reading. Note that pasting jumps immediately, so for an ambiguous pair, typing it (or adding hemisphere letters) is the way to use this.
 
-### Supported Input Examples:
+The marker stays on the map until your next jump replaces it, or until you reload WME.
+
+### Supported input examples
+
 - `1.3521, 103.8198`
 - `N 1.3521, E 103.8198`
 - `1°21'07.6"N 103°49'11.3"E`
 - `6PH57VP3+PR` (Plus Code)
 - `https://maps.app.goo.gl/...`
 - `https://www.google.com/maps/@1.3521,103.8198,17z`
+- `geo:1.3521,103.8198?z=17`
+
+Zoom is taken from the link when it has one, and kept between levels 12 and 22.
+
+## Privacy
+
+Everything is parsed locally in your browser. The only network requests the script makes are to open short links (Google or Apple), and those are sent without your cookies. Your userscript manager may ask you to allow these cross-domain requests the first time; choose "Always allow" for the listed domains.
+
+## Known limitations
+
+- Decimal coordinates need a decimal point (`1.35, 103.82`). Whole numbers like `1, 103` are not recognised.
+- Failures are only reported in the browser console (look for lines starting with `[WSS]`), not on screen.
+- Only the first supported link or token in the pasted text is used.
 
 ## Transparency & Development
 
-I am not a professional software developer. This script was built as a personal project to solve a specific workflow issue in the Waze Map Editor. 
+I am not a professional software developer. This script was built as a personal project to solve a specific workflow issue in the Waze Map Editor.
 
-To make this tool a reality, the initial code structure, parsing logic, and debugging were heavily assisted by Artificial Intelligence (AI). I have tested the script to ensure it works as intended, but please be aware that it was created through a collaborative human-AI effort. Contributions, bug reports, and improvements from the community are always welcome!
+The initial code structure, parsing logic and debugging were heavily assisted by Artificial Intelligence (AI). I have tested the script to ensure it works as intended, but please be aware that it was created through a collaborative human-AI effort. Contributions, bug reports and improvements from the community are welcome. Please use the [issue tracker](https://github.com/9w2xne/wme-share/issues).
 
 ## Author
 
