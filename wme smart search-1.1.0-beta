@@ -1,0 +1,294 @@
+// ==UserScript==
+// @name         WME Smart Search
+// @namespace    https://github.com/9w2xne/wme-share
+// @version      1.1.0
+// @description  Enhances the WME search box to accept coordinates, DMS, Plus Codes, and URLs from multiple map providers. No extra UI.
+// @author       9w2xne
+// @match        https://www.waze.com/editor*
+// @match        https://www.waze.com/*/editor*
+// @match        https://beta.waze.com/editor*
+// @match        https://beta.waze.com/*/editor*
+// @exclude      https://www.waze.com/*user/editor*
+// @exclude      https://www.waze.com/discuss/*
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// @connect      maps.app.goo.gl
+// @connect      goo.gl
+// @connect      google.com
+// @connect      maps.apple
+// @connect      maps.apple.com
+// @license      MIT
+// @supportURL   https://github.com/9w2xne/wme-share/issues
+// @downloadURL  https://raw.githubusercontent.com/9w2xne/wme-share/main/wme-smart-search.user.js
+// @updateURL    https://raw.githubusercontent.com/9w2xne/wme-share/main/wme-smart-search.user.js
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const SCRIPT_ID = 'wme-smart-search';
+    const NAME = 'WME Smart Search';
+    const BOX = '#search-autocomplete';
+    let sdk = null;
+
+    // ------------------------------------------------------------------
+    // helpers
+    // ------------------------------------------------------------------
+    const num = x => parseFloat(String(x).replace(',', '.'));
+    const coordOk = (la, lo) => isFinite(la) && isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180 && !(la === 0 && lo === 0);
+    const clampZoom = z => Math.max(12, Math.min(22, Math.round(z)));
+
+    function result(lat, lon, zoom, src) {
+        lat = num(lat); lon = num(lon);
+        if (!coordOk(lat, lon)) return null;
+        return { lat, lon, zoom: zoom ? clampZoom(+zoom) : 17, src };
+    }
+
+    // ------------------------------------------------------------------
+    // Plus Codes (Open Location Code), decoded locally
+    // ------------------------------------------------------------------
+    const OLC = '23456789CFGHJMPQRVWX';
+    const OLC_RES = [20, 1, 0.05, 0.0025, 0.000125];
+
+    function decodePlusCode(code, center) {
+        code = code.trim().toUpperCase();
+        const sep = code.indexOf('+');
+        if (sep < 2 || sep > 8 || sep % 2 === 1) return null;
+        const digits = code.replace('+', '');
+        for (const ch of digits) if (OLC.indexOf(ch) < 0) return null;
+
+        const pad = 8 - sep;
+        let lat = -90, lon = -180, refLat, refLon;
+        if (pad > 0) {
+            if (!center) return null;
+            refLat = center.lat; refLon = center.lon;
+            const res = OLC_RES[pad / 2 - 1];
+            lat = Math.floor((refLat + 90) / res) * res - 90;
+            lon = Math.floor((refLon + 180) / res) * res - 180;
+        }
+        let latRes = 0, lonRes = 0;
+        const pairCount = Math.min(digits.length, 10 - pad);
+        for (let i = 0; i < pairCount; i++) {
+            const pos = i + pad, res = OLC_RES[Math.floor(pos / 2)], val = OLC.indexOf(digits[i]);
+            if (pos % 2 === 0) { lat += val * res; latRes = res; } else { lon += val * res; lonRes = res; }
+        }
+        let gLat = OLC_RES[4], gLon = OLC_RES[4];
+        for (let i = pairCount; i < digits.length; i++) {
+            const val = OLC.indexOf(digits[i]);
+            gLat /= 5; gLon /= 4;
+            lat += Math.floor(val / 4) * gLat;
+            lon += (val % 4) * gLon;
+            latRes = gLat; lonRes = gLon;
+        }
+        lat += latRes / 2; lon += lonRes / 2;
+        if (pad > 0) {
+            const res = OLC_RES[pad / 2 - 1], half = res / 2;
+            if (lat > refLat + half && lat - res >= -90) lat -= res;
+            else if (lat < refLat - half && lat + res <= 90) lat += res;
+            if (lon > refLon + half) lon -= res;
+            else if (lon < refLon - half) lon += res;
+        }
+        lat = Math.max(-90, Math.min(90, lat));
+        if (lon > 180) lon -= 360; else if (lon < -180) lon += 360;
+        const len = digits.length + pad;
+        return result(lat, lon, len >= 10 ? 18 : len >= 8 ? 16 : 12, 'Plus Code');
+    }
+
+    // ------------------------------------------------------------------
+    // URL parsing: every map site we know
+    // ------------------------------------------------------------------
+    function parseUrl(url) {
+        let d = url.trim();
+        try { d = decodeURIComponent(d); } catch (e) { /* keep raw */ }
+        const host = (/^[a-z][a-z0-9+.-]*:\/\/([^\/?#]+)/i.exec(d) || [])[1] || '';
+        let m;
+        const q = (re) => (re.exec(d) || [])[1];
+
+        if ((m = /^geo:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/i.exec(d))) return result(m[1], m[2], q(/[?&]z=(\d+)/), 'geo:');
+
+        if (/^(maps\.app\.goo\.gl|goo\.gl|g\.co|maps\.apple)$/i.test(host) && !/[?&](?:ll|coordinate|sll|q)=-?\d/.test(d))
+            return { short: url.trim() };
+
+        if (/yandex\./i.test(host)) {
+            m = /[?&]pt=(-?\d+\.\d+),(-?\d+\.\d+)/.exec(d) || /[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/.exec(d);
+            if (m) return result(m[2], m[1], q(/[?&]z=(\d+)/), 'Yandex');
+        }
+        if (/here\.com$/i.test(host)) {
+            m = /[?&]map=(-?\d+\.\d+),(-?\d+\.\d+)(?:,(\d+(?:\.\d+)?))?/.exec(d) || /here\.com\/l\/(-?\d+\.\d+),(-?\d+\.\d+)/.exec(d);
+            if (m) return result(m[1], m[2], m[3], 'HERE');
+        }
+        if (/bing\.com$/i.test(host) && (m = /[?&]cp=(-?\d+\.\d+)~(-?\d+\.\d+)/.exec(d))) return result(m[1], m[2], q(/[?&]lvl=(\d+)/), 'Bing');
+        if (/openstreetmap\.org$/i.test(host)) {
+            const z = /map=(\d+)\/(-?\d+\.\d+)\/(-?\d+\.\d+)/.exec(d);
+            m = /[?&]mlat=(-?\d+\.\d+)&mlon=(-?\d+\.\d+)/.exec(d);
+            if (m) return result(m[1], m[2], z && z[1], 'OpenStreetMap');
+            if (z) return result(z[2], z[3], z[1], 'OpenStreetMap');
+        }
+        if ((m = /#(-?\d+\.\d+),(-?\d+\.\d+),(\d+(?:\.\d+)?)z/.exec(d))) return result(m[1], m[2], m[3], host);
+
+        if ((m = /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/.exec(d))) return result(m[1], m[2], 18, 'Google Maps');
+        if ((m = /@(-?\d+\.\d+),(-?\d+\.\d+)(?:,(\d+(?:\.\d+)?)z)?/.exec(d))) return result(m[1], m[2], m[3] || 17, 'Google Maps');
+        if ((m = /\/maps\/(?:search|place|dir)\/(?:[^\/]*\/)?(-?\d+\.\d+),\s*\+?(-?\d+\.\d+)/.exec(d))) return result(m[1], m[2], 18, 'Google Maps');
+
+        if ((m = /[?&](?:q|query|ll|center|destination|daddr|coordinate|sll|cbll|latlng)=\s*(-?\d+\.\d+)\s*,\s*\+?(-?\d+\.\d+)/.exec(d)))
+            return result(m[1], m[2], q(/[?&](?:zoomLevel|zoom|z|lvl|level)=(\d+)/), host.replace(/^www\./, ''));
+
+        const la = q(/[?&](?:lat|latitude|y)=(-?\d+\.?\d*)/i), lo = q(/[?&](?:lon|lng|long|longitude|x)=(-?\d+\.?\d*)/i);
+        if (la && lo) return result(la, lo, q(/[?&](?:zoomLevel|zoom|z|lvl|level)=(\d+)/), host.replace(/^www\./, ''));
+        return null;
+    }
+
+    // ------------------------------------------------------------------
+    // Text parsing: decimal, hemisphere letters, DMS, Plus Code
+    // ------------------------------------------------------------------
+    function parseDms(s) {
+        const re = /([NSEWO])?\s*(\d{1,3}(?:[.,]\d+)?)\s*[°º]\s*(?:(\d{1,2}(?:[.,]\d+)?)\s*['′’]\s*)?(?:(\d{1,2}(?:[.,]\d+)?)\s*(?:["″”]|'')\s*)?([NSEWO])?/gi;
+        const v = [];
+        let m;
+        while ((m = re.exec(s)) && v.length < 3) {
+            if (!m[0].trim()) { re.lastIndex++; continue; }
+            const f = x => x ? num(x) : 0;
+            const h = (m[1] || m[5] || '').toUpperCase();
+            let deg = f(m[2]) + f(m[3]) / 60 + f(m[4]) / 3600;
+            if (h === 'S' || h === 'W' || h === 'O') deg = -deg;
+            v.push({ deg, h });
+        }
+        if (v.length !== 2) return null;
+        let [a, b] = v;
+        if ('EWO'.includes(a.h || '-') && 'NS'.includes(b.h || '-')) [a, b] = [b, a];
+        const r = result(a.deg, b.deg, 18, 'DMS');
+        if (r && !a.h && !b.h && Math.abs(a.deg) <= 90 && Math.abs(b.deg) <= 90 && a.deg !== b.deg) {
+            const alt = result(b.deg, a.deg, 18, 'DMS (lon, lat)');
+            if (alt) r.alt = alt;
+        }
+        return r;
+    }
+
+    function parseDecimal(s) {
+        let m = /^(-?\d{1,3}\.\d+)\s*([NSEWO])?\s*[,;\s]\s*(-?\d{1,3}\.\d+)\s*([NSEWO])?$/i.exec(s)
+            || /^(-?\d{1,3},\d+)\s*([NSEWO])?\s*[;\s]\s*(-?\d{1,3},\d+)\s*([NSEWO])?$/i.exec(s);
+        if (!m) {
+            const p = /^([NSEWO])\s*(-?\d{1,3}[.,]\d+)\s*[,;\s]\s*([NSEWO])\s*(-?\d{1,3}[.,]\d+)$/i.exec(s);
+            if (p) m = [p[0], p[2], p[1], p[4], p[3]];
+        }
+        if (!m) return null;
+        const sign = (v, h) => /[SWO]/i.test(h || '') ? -Math.abs(v) : v;
+        let a = sign(num(m[1]), m[2]), b = sign(num(m[3]), m[4]);
+        const hA = (m[2] || '').toUpperCase(), hB = (m[4] || '').toUpperCase();
+        if ('EWO'.includes(hA || '-') && 'NS'.includes(hB || '-')) [a, b] = [b, a];
+        if (Math.abs(a) > 90 && Math.abs(b) <= 90) [a, b] = [b, a];
+        const r = result(a, b, 18, 'Coordinates');
+        // both numbers could be either lat or lon: offer the reversed reading too
+        if (r && !hA && !hB && Math.abs(a) <= 90 && Math.abs(b) <= 90 && a !== b) {
+            const alt = result(b, a, 18, 'Coordinates (lon, lat)');
+            if (alt) r.alt = alt;
+        }
+        return r;
+    }
+
+    function mapCenter() {
+        try { const c = sdk.Map.getMapCenter(); return { lat: c.lat, lon: c.lon }; } catch (e) { return null; }
+    }
+
+    // Returns {lat,lon,zoom,src,alt?}, {short:url}, or null
+    function parseInput(raw) {
+        const s = (raw || '').trim();
+        if (!s || s.length > 2000) return null;
+        if (/^(https?:\/\/|geo:)/i.test(s)) return parseUrl(s);
+        const link = /(https?:\/\/\S+|geo:\S+)/i.exec(s);   // a link buried in other text
+        if (link) return parseUrl(link[1]);
+        const tok = s.split(/\s+/)[0];
+        if (/^[23456789CFGHJMPQRVWX]{2,8}\+[23456789CFGHJMPQRVWX]{0,7}$/i.test(tok)) return decodePlusCode(tok, mapCenter());
+        if (/[°º]/.test(s)) return parseDms(s);
+        return parseDecimal(s);
+    }
+
+    // ------------------------------------------------------------------
+    // Map actions + marker
+    // ------------------------------------------------------------------
+    let layerReady = false;
+    function drawMarker(lat, lon) {
+        try {
+            if (!layerReady) {
+                sdk.Map.addLayer({ layerName: NAME, styleRules: [{ style: { strokeColor: '#e53935', strokeWidth: 3, fillColor: '#e53935', fillOpacity: 0.45, pointRadius: 11 } }] });
+                layerReady = true;
+            }
+            sdk.Map.removeAllFeaturesFromLayer({ layerName: NAME });
+            sdk.Map.addFeaturesToLayer({ layerName: NAME, features: [{ type: 'Feature', id: 'wss-pin', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: {} }] });
+        } catch (e) { console.log('[WSS] marker: ' + e.message); }
+    }
+
+    // ------------------------------------------------------------------
+    // Search box wiring
+    // ------------------------------------------------------------------
+    function clearBox(box) {
+        setTimeout(() => {
+            try { box.value = ''; const i = box.shadowRoot && box.shadowRoot.querySelector('#text-input'); if (i) i.value = ''; } catch (e) { /* ignore */ }
+        }, 60);
+    }
+
+    function apply(r) {
+        sdk.Map.setMapCenter({ lonLat: { lat: r.lat, lon: r.lon }, zoomLevel: r.zoom });
+        drawMarker(r.lat, r.lon);
+    }
+
+    function run(r, swap) {
+        if (!r) return;
+        if (r.short) {
+            GM_xmlhttpRequest({
+                method: 'GET', url: r.short, timeout: 10000,
+                onload: res => {
+                    const final = res.finalUrl || r.short;
+                    const p = parseUrl(final);
+                    if (p && !p.short) { apply(p); return; }
+                    const t = res.responseText || '';   // Apple short pages carry place:location meta tags
+                    const la = /place:location:latitude"\s+content="(-?\d+\.?\d*)"/.exec(t), lo = /place:location:longitude"\s+content="(-?\d+\.?\d*)"/.exec(t);
+                    if (la && lo) { apply(result(la[1], lo[1], 18, 'Apple Maps')); return; }
+                },
+                onerror: () => console.log('[WSS] Could not open short link'),
+                ontimeout: () => console.log('[WSS] Short link timed out')
+            });
+            return;
+        }
+        if (swap && r.alt) { r.alt.alt = { lat: r.lat, lon: r.lon, zoom: r.zoom, src: r.src }; r = r.alt; }
+        apply(r);
+    }
+
+    function hook() {
+        const box = document.querySelector(BOX);
+        if (!box) return false;
+        if (box.__wssHooked) return true;
+        box.__wssHooked = true;
+
+        const read = () => {
+            const i = box.shadowRoot && box.shadowRoot.querySelector('#text-input');
+            return (i && i.value) || box.value || '';
+        };
+
+        box.addEventListener('paste', e => {
+            const text = e.clipboardData && e.clipboardData.getData('text');
+            const r = parseInput(text);
+            if (r) { run(r, false); clearBox(box); }
+        }, true);
+
+        box.addEventListener('keydown', e => {
+            if (e.key !== 'Enter') return;
+            const r = parseInput(read());
+            if (!r) return;               // normal WME search continues
+            e.preventDefault(); e.stopPropagation();
+            run(r, e.shiftKey);           // Shift+Enter = use the reversed lon, lat reading
+            clearBox(box);
+        }, true);
+
+        return true;
+    }
+
+    unsafeWindow.SDK_INITIALIZED.then(() => {
+        sdk = unsafeWindow.getWmeSdk({ scriptId: SCRIPT_ID, scriptName: NAME });
+        sdk.Events.once({ eventName: 'wme-ready' }).then(() => {
+            let n = 0;
+            const t = setInterval(() => { if (hook() || ++n > 150) clearInterval(t); }, 200);
+            console.log('[WSS] ready');
+        });
+    });
+})();
