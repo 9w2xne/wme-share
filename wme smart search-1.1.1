@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WME Smart Search
 // @namespace    https://github.com/9w2xne/wme-share
-// @version      1.1.0
-// @description  Enhances the WME search box to accept coordinates, DMS, Plus Codes, and URLs from multiple map providers. No extra UI.
+// @version      1.1.1
+// @description  Enhances the WME search box to accept coordinates, DMS, Plus Codes, and URLs from multiple map providers.
 // @author       9w2xne
 // @match        https://www.waze.com/editor*
 // @match        https://www.waze.com/*/editor*
@@ -95,7 +95,7 @@
     }
 
     // ------------------------------------------------------------------
-    // URL parsing: every map site we know
+    // URL parsing
     // ------------------------------------------------------------------
     function parseUrl(url) {
         let d = url.trim();
@@ -139,7 +139,7 @@
     }
 
     // ------------------------------------------------------------------
-    // Text parsing: decimal, hemisphere letters, DMS, Plus Code
+    // Text parsing
     // ------------------------------------------------------------------
     function parseDms(s) {
         const re = /([NSEWO])?\s*(\d{1,3}(?:[.,]\d+)?)\s*[°º]\s*(?:(\d{1,2}(?:[.,]\d+)?)\s*['′’]\s*)?(?:(\d{1,2}(?:[.,]\d+)?)\s*(?:["″”]|'')\s*)?([NSEWO])?/gi;
@@ -194,6 +194,14 @@
     function parseInput(raw) {
         const s = (raw || '').trim();
         if (!s || s.length > 2000) return null;
+
+        // --- NEW SAFEGUARD ---
+        // If it doesn't contain map-related characters/words and it has spaces, ignore it.
+        // This prevents parsing sentences, usernames, or passwords.
+        if (s.includes(' ') && !/[NSEWO°º]|https?:\/\/|geo:|\+/.test(s)) {
+            return null;
+        }
+
         if (/^(https?:\/\/|geo:)/i.test(s)) return parseUrl(s);
         const link = /(https?:\/\/\S+|geo:\S+)/i.exec(s);   // a link buried in other text
         if (link) return parseUrl(link[1]);
@@ -266,6 +274,9 @@
         };
 
         box.addEventListener('paste', e => {
+            // If the user is pasting into a password field, stop.
+            if (e.target && e.target.type === 'password') return;
+
             const text = e.clipboardData && e.clipboardData.getData('text');
             const r = parseInput(text);
             if (r) { run(r, false); clearBox(box); }
@@ -273,6 +284,10 @@
 
         box.addEventListener('keydown', e => {
             if (e.key !== 'Enter') return;
+
+            // If typing in a password field, stop.
+            if (e.target && e.target.type === 'password') return;
+
             const r = parseInput(read());
             if (!r) return;               // normal WME search continues
             e.preventDefault(); e.stopPropagation();
