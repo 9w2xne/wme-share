@@ -14,7 +14,10 @@
 // @grant        unsafeWindow
 // @connect      maps.app.goo.gl
 // @connect      goo.gl
+// @connect      g.co
 // @connect      google.com
+// @connect      google.com.my
+// @connect      google.com.sg
 // @connect      maps.apple
 // @connect      maps.apple.com
 // @license      MIT
@@ -142,15 +145,16 @@
     // Text parsing
     // ------------------------------------------------------------------
     function parseDms(s) {
-        const re = /([NSEWO])?\s*(\d{1,3}(?:[.,]\d+)?)\s*[°º]\s*(?:(\d{1,2}(?:[.,]\d+)?)\s*['′’]\s*)?(?:(\d{1,2}(?:[.,]\d+)?)\s*(?:["″”]|'')\s*)?([NSEWO])?/gi;
+        // groups: 1 hemisphere (prefix), 2 minus sign, 3 degrees, 4 minutes, 5 seconds, 6 hemisphere (suffix)
+        const re = /([NSEWO])?\s*([-\u2212])?\s*(\d{1,3}(?:[.,]\d+)?)\s*[°º]\s*(?:(\d{1,2}(?:[.,]\d+)?)\s*['′’]\s*)?(?:(\d{1,2}(?:[.,]\d+)?)\s*(?:["″”]|'')\s*)?([NSEWO])?/gi;
         const v = [];
         let m;
         while ((m = re.exec(s)) && v.length < 3) {
             if (!m[0].trim()) { re.lastIndex++; continue; }
             const f = x => x ? num(x) : 0;
-            const h = (m[1] || m[5] || '').toUpperCase();
-            let deg = f(m[2]) + f(m[3]) / 60 + f(m[4]) / 3600;
-            if (h === 'S' || h === 'W' || h === 'O') deg = -deg;
+            const h = (m[1] || m[6] || '').toUpperCase();
+            let deg = f(m[3]) + f(m[4]) / 60 + f(m[5]) / 3600;
+            if (m[2] || h === 'S' || h === 'W' || h === 'O') deg = -deg;
             v.push({ deg, h });
         }
         if (v.length !== 2) return null;
@@ -195,12 +199,9 @@
         const s = (raw || '').trim();
         if (!s || s.length > 2000) return null;
 
-        // --- NEW SAFEGUARD ---
-        // If it doesn't contain map-related characters/words and it has spaces, ignore it.
-        // This prevents parsing sentences, usernames, or passwords.
-        if (s.includes(' ') && !/[NSEWO°º]|https?:\/\/|geo:|\+/.test(s)) {
-            return null;
-        }
+        // Every supported input (coordinates, DMS, Plus Code, URL) contains a digit.
+        // Plain sentences with spaces are ignored so ordinary searches are never touched.
+        if (s.includes(' ') && !/\d/.test(s)) return null;
 
         if (/^(https?:\/\/|geo:)/i.test(s)) return parseUrl(s);
         const link = /(https?:\/\/\S+|geo:\S+)/i.exec(s);   // a link buried in other text
@@ -245,6 +246,7 @@
         if (r.short) {
             GM_xmlhttpRequest({
                 method: 'GET', url: r.short, timeout: 10000,
+                anonymous: true,   // do not send the user's Google/Apple cookies
                 onload: res => {
                     const final = res.finalUrl || r.short;
                     const p = parseUrl(final);
@@ -252,6 +254,7 @@
                     const t = res.responseText || '';   // Apple short pages carry place:location meta tags
                     const la = /place:location:latitude"\s+content="(-?\d+\.?\d*)"/.exec(t), lo = /place:location:longitude"\s+content="(-?\d+\.?\d*)"/.exec(t);
                     if (la && lo) { apply(result(la[1], lo[1], 18, 'Apple Maps')); return; }
+                    console.log('[WSS] No coordinates found in short link');
                 },
                 onerror: () => console.log('[WSS] Could not open short link'),
                 ontimeout: () => console.log('[WSS] Short link timed out')
@@ -274,20 +277,16 @@
         };
 
         box.addEventListener('paste', e => {
-            // If the user is pasting into a password field, stop.
-            if (e.target && e.target.type === 'password') return;
-
             const text = e.clipboardData && e.clipboardData.getData('text');
             const r = parseInput(text);
-            if (r) { run(r, false); clearBox(box); }
+            if (!r) return;               // normal paste continues
+            e.preventDefault(); e.stopPropagation();
+            run(r, false);
+            clearBox(box);
         }, true);
 
         box.addEventListener('keydown', e => {
             if (e.key !== 'Enter') return;
-
-            // If typing in a password field, stop.
-            if (e.target && e.target.type === 'password') return;
-
             const r = parseInput(read());
             if (!r) return;               // normal WME search continues
             e.preventDefault(); e.stopPropagation();
@@ -298,12 +297,30 @@
         return true;
     }
 
-    unsafeWindow.SDK_INITIALIZED.then(() => {
+    // Re-hook whenever WME re-renders the search box (hook() is a no-op if already hooked).
+    function watchSearchBox() {
+        hook();
+        let queued = false;
+        new MutationObserver(() => {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(() => { queued = false; hook(); });
+        }).observe(document.body, { childList: true, subtree: true });
+    }
+
+    function boot() {
         sdk = unsafeWindow.getWmeSdk({ scriptId: SCRIPT_ID, scriptName: NAME });
         sdk.Events.once({ eventName: 'wme-ready' }).then(() => {
-            let n = 0;
-            const t = setInterval(() => { if (hook() || ++n > 150) clearInterval(t); }, 200);
+            watchSearchBox();
             console.log('[WSS] ready');
         });
-    });
+    }
+
+    // SDK_INITIALIZED may not exist yet if this script runs before WME sets it up.
+    let tries = 0;
+    (function waitForSdk() {
+        if (unsafeWindow.SDK_INITIALIZED) { unsafeWindow.SDK_INITIALIZED.then(boot); return; }
+        if (++tries > 150) { console.warn('[WSS] WME SDK not found'); return; }
+        setTimeout(waitForSdk, 200);
+    })();
 })();
