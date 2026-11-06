@@ -11,6 +11,7 @@ By default, the WME search box only handles basic text searches. This script int
 - **Short Link Resolution:** Automatically follows shortened URLs from Google Maps (`goo.gl`) and Apple Maps to find the hidden coordinates.
 - **Multi-Platform URL Support:** Extracts coordinates from links pointing to Google Maps, Apple Maps, Waze, OpenStreetMap, Bing, Yandex, or HERE.
 - **Ambiguous Coordinate Swapping:** If you input coordinates without cardinal directions (e.g., `1.23, 4.56`) and the map centers on the wrong spot, press `Shift+Enter` to swap the latitude and longitude.
+- **Autofill Protection:** Built-in safeguards prevent the script from accidentally triggering on standard text inputs, usernames, or passwords.
 
 ## Installation
 
@@ -42,6 +43,12 @@ If you enter coordinates without N/S/E/W letters, the script must guess the orde
 - `6PH57VP3+PR` (Plus Code)
 - `https://maps.app.goo.gl/...`
 - `https://www.google.com/maps/@1.3521,103.8198,17z`
+
+## Transparency & Development
+
+I am not a professional software developer. This script was built as a personal project to solve a specific workflow issue in the Waze Map Editor. 
+
+To make this tool a reality, the initial code structure, parsing logic, and debugging were heavily assisted by Artificial Intelligence (AI). I have tested the script to ensure it works as intended, but please be aware that it was created through a collaborative human-AI effort. Contributions, bug reports, and improvements from the community are always welcome!
 
 ## Author
 
