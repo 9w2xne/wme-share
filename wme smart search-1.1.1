@@ -10,6 +10,7 @@
 // @match        https://beta.waze.com/*/editor*
 // @exclude      https://www.waze.com/*user/editor*
 // @exclude      https://www.waze.com/discuss/*
+// @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      maps.app.goo.gl
@@ -31,7 +32,7 @@
 
     const SCRIPT_ID = 'wme-smart-search';
     const NAME = 'WME Smart Search';
-    const BOX = '#search-autocomplete';
+    const BOX_ID = 'search-autocomplete';
     let sdk = null;
 
     // ------------------------------------------------------------------
@@ -98,6 +99,27 @@
     }
 
     // ------------------------------------------------------------------
+    // Geohash (used by Waze app share links), decoded locally
+    // ------------------------------------------------------------------
+    const GH = '0123456789bcdefghjkmnpqrstuvwxyz';
+
+    function decodeGeohash(hash) {
+        hash = String(hash).toLowerCase();
+        let lat = [-90, 90], lon = [-180, 180], even = true;
+        for (const ch of hash) {
+            const v = GH.indexOf(ch);
+            if (v < 0) return null;
+            for (let b = 4; b >= 0; b--) {
+                const r = even ? lon : lat, mid = (r[0] + r[1]) / 2;
+                if ((v >> b) & 1) r[0] = mid; else r[1] = mid;
+                even = !even;
+            }
+        }
+        const len = hash.length;
+        return result((lat[0] + lat[1]) / 2, (lon[0] + lon[1]) / 2, len >= 8 ? 18 : len >= 6 ? 16 : 13, 'Waze share link');
+    }
+
+    // ------------------------------------------------------------------
     // URL parsing
     // ------------------------------------------------------------------
     function parseUrl(url) {
@@ -111,6 +133,13 @@
 
         if (/^(maps\.app\.goo\.gl|goo\.gl|g\.co|maps\.apple)$/i.test(host) && !/[?&](?:ll|coordinate|sll|q)=-?\d/.test(d))
             return { short: url.trim() };
+
+        // Waze app share link: waze.com/ul/h<geohash> (also the legacy meetup/location?h=<geohash>)
+        if (/(^|\.)waze\.(com|to)$/i.test(host)
+            && (m = /\/ul\/h([0-9bcdefghjkmnpqrstuvwxyz]{4,12})(?:[\/?#]|$)/i.exec(d) || /[?&]h=([0-9bcdefghjkmnpqrstuvwxyz]{4,12})(?:&|$)/i.exec(d))) {
+            const g = decodeGeohash(m[1]);
+            if (g) return g;
+        }
 
         if (/yandex\./i.test(host)) {
             m = /[?&]pt=(-?\d+\.\d+),(-?\d+\.\d+)/.exec(d) || /[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/.exec(d);
@@ -203,6 +232,7 @@
         // Plain sentences with spaces are ignored so ordinary searches are never touched.
         if (s.includes(' ') && !/\d/.test(s)) return null;
 
+        if (/^(www\.|ul\.)?waze\.(com|to)\/\S+$/i.test(s)) return parseUrl('https://' + s);   // Waze link pasted without https://
         if (/^(https?:\/\/|geo:)/i.test(s)) return parseUrl(s);
         const link = /(https?:\/\/\S+|geo:\S+)/i.exec(s);   // a link buried in other text
         if (link) return parseUrl(link[1]);
@@ -230,15 +260,211 @@
     // ------------------------------------------------------------------
     // Search box wiring
     // ------------------------------------------------------------------
-    function clearBox(box) {
+    const dbg = (...a) => {
+        try { if (localStorage.getItem('wss-debug') === '1') console.log('[WSS]', ...a); } catch (e) { /* ignore */ }
+    };
+
+    // b = { host, inner }: the search box element and the real <input> inside it (if reachable).
+    // After a jump, empty the box and tell WME the text changed so it closes its suggestion list.
+    function clearBox(b) {
         setTimeout(() => {
-            try { box.value = ''; const i = box.shadowRoot && box.shadowRoot.querySelector('#text-input'); if (i) i.value = ''; } catch (e) { /* ignore */ }
+            try {
+                b.host.value = '';
+                const i = b.inner || (b.host.shadowRoot && b.host.shadowRoot.querySelector('input'));
+                if (i) {
+                    i.value = '';
+                    i.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                }
+            } catch (e) { /* ignore */ }
         }, 60);
     }
 
+    // ------------------------------------------------------------------
+    // Own search panel: a small draggable window with its own input box.
+    // It never touches the WME search box, so WME cannot pick a suggestion over it.
+    // ------------------------------------------------------------------
+    const HOOK_WME_BOX = false;   // set true to also intercept paste/Enter in the WME search box itself
+    const POS_KEY = 'wme-smart-search:panel-pos';
+    const MIN_KEY = 'wme-smart-search:panel-min';
+    let panel = null, bodyEl = null, inputEl = null, statusEl = null, resultEl = null, minBtn = null;
+
+    const store = {
+        get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+        set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+    };
+
+    function placePanel(left, top) {
+        const w = panel.offsetWidth || 300, h = panel.offsetHeight || 40;
+        left = Math.max(0, Math.min(window.innerWidth - w, left));
+        top = Math.max(0, Math.min(window.innerHeight - h, top));
+        panel.style.left = left + 'px';
+        panel.style.top = top + 'px';
+        return { left, top };
+    }
+
+    function restorePos() {
+        let p = null;
+        try { p = JSON.parse(store.get(POS_KEY)); } catch (e) { /* corrupt */ }
+        if (p && isFinite(p.left) && isFinite(p.top)) placePanel(p.left, p.top);
+        else placePanel(window.innerWidth - (panel.offsetWidth || 300) - 20, 90);   // first run: top right
+    }
+
+    function makeDraggable(handle) {
+        handle.addEventListener('pointerdown', ev => {
+            if (ev.button !== 0 || (ev.target.closest && ev.target.closest('button'))) return;
+            const rect = panel.getBoundingClientRect();
+            const dx = ev.clientX - rect.left, dy = ev.clientY - rect.top;
+            let pos = null;
+            const move = e => { pos = placePanel(e.clientX - dx, e.clientY - dy); };
+            const up = () => {
+                document.removeEventListener('pointermove', move);
+                document.removeEventListener('pointerup', up);
+                if (pos) store.set(POS_KEY, JSON.stringify(pos));
+            };
+            document.addEventListener('pointermove', move);
+            document.addEventListener('pointerup', up);
+            ev.preventDefault();
+        });
+    }
+
+    function setStatus(msg, bad) {
+        if (!statusEl) return;
+        statusEl.textContent = msg || '';
+        statusEl.style.color = bad ? '#ff8a80' : '#b0bec5';
+        statusEl.style.display = msg ? 'block' : 'none';
+    }
+
+    function setResult(r) {
+        if (!resultEl) return;
+        while (resultEl.firstChild) resultEl.removeChild(resultEl.firstChild);
+        const lat = r.lat.toFixed(6), lon = r.lon.toFixed(6), text = lat + ', ' + lon;
+        const link = (txt, href) => {
+            const a = document.createElement('a');
+            a.textContent = txt; a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+            a.style.cssText = 'color:#80d8ff;margin-right:10px';
+            return a;
+        };
+        const head = document.createElement('div');
+        const src = document.createElement('span');
+        src.textContent = (r.src || 'Location') + ': ';
+        src.style.color = '#b0bec5';
+        const coord = document.createElement('b');
+        coord.textContent = text;
+        coord.style.userSelect = 'all';
+        head.appendChild(src); head.appendChild(coord);
+
+        const links = document.createElement('div');
+        links.style.marginTop = '4px';
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy';
+        copy.style.cssText = 'color:#80d8ff;background:none;border:0;padding:0;margin-right:10px;font:inherit;text-decoration:underline;cursor:pointer';
+        copy.onclick = () => {
+            try { navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Copied'; }, () => { copy.textContent = 'Copy failed'; }); }
+            catch (e) { copy.textContent = 'Copy failed'; }
+        };
+        links.appendChild(copy);
+        links.appendChild(link('Waze Live Map', 'https://www.waze.com/live-map?zoom=18&lat=' + lat + '&lon=' + lon));
+        links.appendChild(link('Google Maps', 'https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lon));
+        resultEl.appendChild(head); resultEl.appendChild(links);
+        resultEl.style.display = 'block';
+    }
+
+    function setMinimised(min) {
+        if (!panel) return;
+        bodyEl.style.display = min ? 'none' : 'block';
+        minBtn.textContent = min ? '▸' : '―';
+        minBtn.title = min ? 'Open' : 'Minimise';
+        panel.style.width = min ? 'auto' : '300px';
+        store.set(MIN_KEY, min ? '1' : '0');
+        placePanel(parseFloat(panel.style.left) || 0, parseFloat(panel.style.top) || 0);   // keep it on screen
+    }
+
+    // Parse what is in the panel's input and jump. swap = read an ambiguous pair as lon, lat.
+    function submit(swap) {
+        const text = (inputEl.value || '').trim();
+        if (!text) { setStatus('Paste coordinates, a Plus Code or a map link', false); return; }
+        const r = parseInput(text);
+        dbg('panel', JSON.stringify(text.slice(0, 80)), r ? 'recognised' : 'not recognised');
+        if (!r) { setStatus('Not recognised: ' + text.slice(0, 60), true); return; }
+        if (r.short) { setStatus('Opening short link…', false); run(r, swap); return; }
+        setStatus('', false);
+        run(r, swap);
+    }
+
+    function buildPanel() {
+        if (panel || !document.body) return;
+        panel = document.createElement('div');
+        panel.id = 'wss-panel';
+        panel.style.cssText = 'position:fixed;top:90px;left:20px;z-index:100000;width:300px;max-width:92vw;background:#263238;color:#fff;font:13px/1.4 sans-serif;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.4)';
+
+        const head = document.createElement('div');
+        head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:5px 8px;cursor:move;touch-action:none;user-select:none;gap:8px';
+        const title = document.createElement('span');
+        title.textContent = '📍 Smart Search';
+        title.style.fontWeight = '600';
+        minBtn = document.createElement('button');
+        minBtn.style.cssText = 'background:none;border:0;color:#fff;cursor:pointer;font:inherit;padding:0 4px';
+        minBtn.onclick = () => setMinimised(bodyEl.style.display !== 'none');
+        head.appendChild(title); head.appendChild(minBtn);
+
+        bodyEl = document.createElement('div');
+        bodyEl.style.cssText = 'padding:2px 8px 8px';
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:6px';
+        inputEl = document.createElement('input');
+        inputEl.type = 'text';
+        inputEl.placeholder = 'lat, lon • Plus Code • map link';
+        inputEl.autocomplete = 'off';
+        inputEl.spellcheck = false;
+        inputEl.style.cssText = 'flex:1;min-width:0;padding:4px 6px;border:1px solid #546e7a;border-radius:4px;background:#37474f;color:#fff;font:inherit';
+        const go = document.createElement('button');
+        go.textContent = 'Go';
+        go.title = 'Go to the location (Enter)';
+        const swp = document.createElement('button');
+        swp.textContent = '⇄';
+        swp.title = 'Read as lon, lat instead (Shift+Enter)';
+        [go, swp].forEach(b => { b.style.cssText = 'padding:4px 8px;border:0;border-radius:4px;background:#0288d1;color:#fff;cursor:pointer;font:inherit'; });
+        go.onclick = () => submit(false);
+        swp.onclick = () => submit(true);
+        row.appendChild(inputEl); row.appendChild(go); row.appendChild(swp);
+
+        statusEl = document.createElement('div');
+        statusEl.style.cssText = 'display:none;margin-top:6px;word-break:break-word';
+        resultEl = document.createElement('div');
+        resultEl.style.cssText = 'display:none;margin-top:6px;word-break:break-word';
+        bodyEl.appendChild(row); bodyEl.appendChild(statusEl); bodyEl.appendChild(resultEl);
+
+        panel.appendChild(head); panel.appendChild(bodyEl);
+
+        // Keep key presses inside the panel away from WME's keyboard shortcuts.
+        ['keydown', 'keyup', 'keypress'].forEach(t => panel.addEventListener(t, e => e.stopPropagation()));
+        inputEl.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submit(e.shiftKey); }
+        });
+        inputEl.addEventListener('paste', e => {
+            const text = (e.clipboardData && e.clipboardData.getData('text')) || '';
+            const r = parseInput(text);
+            if (!r) return;                   // normal paste, press Enter to see why it is not recognised
+            e.preventDefault();
+            inputEl.value = text.trim();
+            if (r.short) setStatus('Opening short link…', false); else setStatus('', false);
+            run(r, false);
+        });
+
+        makeDraggable(head);
+        document.body.appendChild(panel);
+        setMinimised(store.get(MIN_KEY) === '1');
+        restorePos();
+        window.addEventListener('resize', () => placePanel(parseFloat(panel.style.left) || 0, parseFloat(panel.style.top) || 0));
+    }
+
     function apply(r) {
-        sdk.Map.setMapCenter({ lonLat: { lat: r.lat, lon: r.lon }, zoomLevel: r.zoom });
+        if (!sdk) { setStatus('WME is still loading, try again in a moment', true); return; }
+        try {
+            sdk.Map.setMapCenter({ lonLat: { lat: r.lat, lon: r.lon }, zoomLevel: r.zoom });
+        } catch (e) { setStatus('Could not move the map: ' + e.message, true); return; }
         drawMarker(r.lat, r.lon);
+        setResult(r);
     }
 
     function run(r, swap) {
@@ -250,14 +476,14 @@
                 onload: res => {
                     const final = res.finalUrl || r.short;
                     const p = parseUrl(final);
-                    if (p && !p.short) { apply(p); return; }
+                    if (p && !p.short) { setStatus('', false); apply(p); return; }
                     const t = res.responseText || '';   // Apple short pages carry place:location meta tags
                     const la = /place:location:latitude"\s+content="(-?\d+\.?\d*)"/.exec(t), lo = /place:location:longitude"\s+content="(-?\d+\.?\d*)"/.exec(t);
-                    if (la && lo) { apply(result(la[1], lo[1], 18, 'Apple Maps')); return; }
-                    console.log('[WSS] No coordinates found in short link');
+                    if (la && lo) { setStatus('', false); apply(result(la[1], lo[1], 18, 'Apple Maps')); return; }
+                    setStatus('No coordinates found in that short link', true);
                 },
-                onerror: () => console.log('[WSS] Could not open short link'),
-                ontimeout: () => console.log('[WSS] Short link timed out')
+                onerror: () => setStatus('Could not open the short link', true),
+                ontimeout: () => setStatus('Short link timed out', true)
             });
             return;
         }
@@ -265,55 +491,71 @@
         apply(r);
     }
 
-    function hook() {
-        const box = document.querySelector(BOX);
-        if (!box) return false;
-        if (box.__wssHooked) return true;
-        box.__wssHooked = true;
-
-        const read = () => {
-            const i = box.shadowRoot && box.shadowRoot.querySelector('#text-input');
-            return (i && i.value) || box.value || '';
-        };
-
-        box.addEventListener('paste', e => {
-            const text = e.clipboardData && e.clipboardData.getData('text');
-            const r = parseInput(text);
-            if (!r) return;               // normal paste continues
-            e.preventDefault(); e.stopPropagation();
-            run(r, false);
-            clearBox(box);
-        }, true);
-
-        box.addEventListener('keydown', e => {
-            if (e.key !== 'Enter') return;
-            const r = parseInput(read());
-            if (!r) return;               // normal WME search continues
-            e.preventDefault(); e.stopPropagation();
-            run(r, e.shiftKey);           // Shift+Enter = use the reversed lon, lat reading
-            clearBox(box);
-        }, true);
-
-        return true;
+    // The listeners sit on window (capture phase) and check where each event came from, instead of being
+    // attached to the search box itself. That way they run before WME's own handlers, still work if WME
+    // re-renders the box, and do not depend on the SDK or on WME being "ready" before they are installed.
+    function searchBoxOf(e) {
+        const path = e.composedPath ? e.composedPath() : [];
+        const host = path.find(n => n && n.id === BOX_ID);
+        if (!host) return null;
+        const first = path[0];
+        const inner = (first && first !== host && 'value' in first) ? first
+            : ((host.shadowRoot && host.shadowRoot.querySelector('input')) || null);
+        return { host, inner };
     }
 
-    // Re-hook whenever WME re-renders the search box (hook() is a no-op if already hooked).
-    function watchSearchBox() {
-        hook();
-        let queued = false;
-        new MutationObserver(() => {
-            if (queued) return;
-            queued = true;
-            requestAnimationFrame(() => { queued = false; hook(); });
-        }).observe(document.body, { childList: true, subtree: true });
+    const boxText = b => (b.inner && b.inner.value) || b.host.value || '';
+
+    function stop(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+    }
+
+    let swallowEnter = false;   // true from an intercepted Enter keydown until its keyup
+
+    function onKey(e) {
+        if (e.key !== 'Enter' || e.isComposing) return;
+        const b = searchBoxOf(e);
+        if (!b) return;
+        if (e.type === 'keydown') {
+            const text = boxText(b), r = parseInput(text);
+            dbg('Enter', JSON.stringify(text.slice(0, 80)), r ? 'recognised: ' + r.src : 'not recognised, WME search continues');
+            swallowEnter = !!r;
+            if (!r) return;                 // normal WME search continues
+            stop(e);
+            run(r, e.shiftKey);             // Shift+Enter = use the reversed lon, lat reading
+            clearBox(b);
+        } else if (swallowEnter) {          // keypress / keyup of the same Enter: keep WME from acting on it
+            stop(e);
+            if (e.type === 'keyup') swallowEnter = false;
+        }
+    }
+
+    function onPaste(e) {
+        const b = searchBoxOf(e);
+        if (!b) return;
+        const text = (e.clipboardData && e.clipboardData.getData('text')) || '';
+        const r = parseInput(text);
+        dbg('paste', JSON.stringify(text.slice(0, 80)), r ? 'recognised: ' + r.src : 'not recognised, normal paste');
+        if (!r) return;                     // normal paste continues
+        stop(e);
+        run(r, false);
+        clearBox(b);
+    }
+
+    if (HOOK_WME_BOX) {
+        ['keydown', 'keypress', 'keyup'].forEach(t => window.addEventListener(t, onKey, true));
+        window.addEventListener('paste', onPaste, true);
+        console.log('[WSS] WME search box hooks installed');
     }
 
     function boot() {
         sdk = unsafeWindow.getWmeSdk({ scriptId: SCRIPT_ID, scriptName: NAME });
-        sdk.Events.once({ eventName: 'wme-ready' }).then(() => {
-            watchSearchBox();
-            console.log('[WSS] ready');
-        });
+        console.log('[WSS] SDK connected');
+        buildPanel();
+        console.log('[WSS] panel ready');
+        sdk.Events.once({ eventName: 'wme-ready' }).then(() => console.log('[WSS] ready'));
     }
 
     // SDK_INITIALIZED may not exist yet if this script runs before WME sets it up.
