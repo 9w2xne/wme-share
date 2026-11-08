@@ -22,7 +22,7 @@ The bar is separate from the WME search box. WME's own search is not changed in 
    - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Edge, Firefox)
 
    *Recent versions of Chrome and Edge may require you to enable user scripts for the extension (the "Allow User Scripts" toggle, or Developer mode) before any script will run. Your userscript manager's page explains this.*
-2. **[Click here to install WME Smart Search](https://raw.githubusercontent.com/9w2xne/wme-share/main/wme-smart-search.user.js)**
+2. **[Click here to install WME Smart Search](https://raw.githubusercontent.com/dinkaftac/wme-smart-search/main/wme-smart-search.user.js)**
 3. Your userscript manager will prompt you to install the script. Click **Install**.
 4. Reload WME. The bar appears near the top centre of the page.
 
@@ -103,12 +103,12 @@ Everything is parsed locally in your browser. The only network requests the scri
 
 I am not a professional software developer. This script was built as a personal project to solve a specific workflow issue in the Waze Map Editor.
 
-The initial code structure, parsing logic and debugging were heavily assisted by Artificial Intelligence (AI). I have tested the script to ensure it works as intended, but please be aware that it was created through a collaborative human-AI effort. Contributions, bug reports and improvements from the community are welcome. Please use the [issue tracker](https://github.com/9w2xne/wme-share/issues).
+The initial code structure, parsing logic and debugging were heavily assisted by Artificial Intelligence (AI). I have tested the script to ensure it works as intended, but please be aware that it was created through a collaborative human-AI effort. Contributions, bug reports and improvements from the community are welcome. Please use the [issue tracker](https://github.com/dinkaftac/wme-smart-search/issues).
 
 ## Author
 
-**9w2xne**
-- GitHub: [@9w2xne](https://github.com/9w2xne)
+**dinkaftac**
+- GitHub: [@dinkaftac](https://github.com/dinkaftac)
 
 ## License
 
