@@ -256,7 +256,9 @@
             sdk.Map.addFeaturesToLayer({ layerName: NAME, features: [{ type: 'Feature', id: 'wss-pin', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: {} }] });
         } catch (e) { console.log('[WSS] marker: ' + e.message); }
     }
-
+    function clearMarker() {
+        try { if (layerReady) sdk.Map.removeAllFeaturesFromLayer({ layerName: NAME }); } catch (e) { /* ignore */ }
+    }
     // ------------------------------------------------------------------
     // Search box wiring
     // ------------------------------------------------------------------
@@ -377,6 +379,12 @@
             a.style.cssText = LINK_CSS;
             return a;
         };
+                const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕';
+        closeBtn.title = 'Close (Esc)';
+        closeBtn.style.cssText = 'background:none;border:0;padding:0 4px 0 0;cursor:pointer;color:#b0bec5;font:inherit;flex:none';
+        closeBtn.onclick = () => { setInfo(null); clearMarker(); };
+        wrap.appendChild(closeBtn);
         wrap.appendChild(src); wrap.appendChild(coord); wrap.appendChild(copy);
         wrap.appendChild(link('Waze', 'Open in Waze Live Map', 'https://www.waze.com/live-map?zoom=18&lat=' + lat + '&lon=' + lon));
         wrap.appendChild(link('Google', 'Open in Google Maps', 'https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lon));
@@ -447,6 +455,9 @@
         ['keydown', 'keyup', 'keypress'].forEach(t => panel.addEventListener(t, e => e.stopPropagation()));
         inputEl.addEventListener('keydown', e => {
             if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submit(e.shiftKey); }
+        });
+        inputEl.addEventListener('keydown', e => {
+            if (e.key === 'Escape') { setInfo(null); clearMarker(); }
         });
         inputEl.addEventListener('input', () => { if (infoEl.firstChild) setInfo(null); });
         inputEl.addEventListener('paste', e => {
