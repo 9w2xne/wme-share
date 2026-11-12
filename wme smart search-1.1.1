@@ -347,6 +347,7 @@
         if (node) infoEl.appendChild(node);
         infoEl.style.color = bad ? '#ff8a80' : '#fff';
         infoEl.style.display = (node && !collapsed) ? 'inline-flex' : 'none';
+        if (node) infoTimer = setTimeout(() => setInfo(null), AUTO_CLOSE_MS);
     }
 
     function setStatus(msg, bad) {
@@ -390,7 +391,6 @@
         wrap.appendChild(link('Waze', 'Open in Waze Live Map', 'https://www.waze.com/live-map?zoom=18&lat=' + lat + '&lon=' + lon));
         wrap.appendChild(link('Google', 'Open in Google Maps', 'https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lon));
         setInfo(wrap, false);
-        infoTimer = setTimeout(() => setInfo(null), AUTO_CLOSE_MS);
     }
     const AUTO_CLOSE_MS = 7000;   // how long the result strip stays open (6000-8000 works well)
     let infoTimer = null;
