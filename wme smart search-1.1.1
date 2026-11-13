@@ -347,7 +347,7 @@
         if (node) infoEl.appendChild(node);
         infoEl.style.color = bad ? '#ff8a80' : '#fff';
         infoEl.style.display = (node && !collapsed) ? 'inline-flex' : 'none';
-        if (node) infoTimer = setTimeout(() => setInfo(null), AUTO_CLOSE_MS);
+        if (node) { infoTimer = setTimeout(() => setInfo(null), AUTO_CLOSE_MS); startIdle(); }
     }
 
     function setStatus(msg, bad) {
@@ -394,6 +394,16 @@
     }
     const AUTO_CLOSE_MS = 7000;   // how long the result strip stays open (6000-8000 works well)
     let infoTimer = null;
+    const AUTO_COLLAPSE_MS = 20000;   // idle time before the bar shrinks to just the pin
+    let idleTimer = null;
+    function startIdle() {
+        clearTimeout(idleTimer);
+        if (collapsed) return;
+        idleTimer = setTimeout(() => {
+            if (document.activeElement === inputEl && inputEl.value) { startIdle(); return; }   // still typing
+            setMinimised(true);
+        }, AUTO_COLLAPSE_MS);
+    }
     const LINK_CSS = 'color:#80d8ff;text-decoration:underline;font:inherit';
     const BTN_CSS = 'height:26px;padding:0 9px;border:0;border-radius:4px;background:#0288d1;color:#fff;cursor:pointer;font:inherit;flex:none';
 
@@ -405,6 +415,7 @@
         infoEl.style.display = (min || !infoEl.firstChild) ? 'none' : 'inline-flex';
         pinBtn.title = min ? 'Click to open, drag to move' : 'Drag to move, click to collapse';
         store.set(MIN_KEY, min ? '1' : '0');
+        if (min) clearTimeout(idleTimer); else startIdle();
         placePanel(parseFloat(panel.style.left) || 0, parseFloat(panel.style.top) || 0);   // keep it on screen
     }
 
@@ -473,6 +484,7 @@
             run(r, false);
         });
 
+        ['pointerenter', 'pointerdown', 'keydown', 'input'].forEach(t => panel.addEventListener(t, startIdle));
         makeDraggable(panel, pinBtn, () => setMinimised(!collapsed));
         document.body.appendChild(panel);
         setMinimised(store.get(MIN_KEY) === '1');
@@ -575,11 +587,12 @@
     function boot() {
         sdk = unsafeWindow.getWmeSdk({ scriptId: SCRIPT_ID, scriptName: NAME });
         console.log('[WSS] SDK connected');
-        buildPanel();
-        console.log('[WSS] panel ready');
-        sdk.Events.once({ eventName: 'wme-ready' }).then(() => console.log('[WSS] ready'));
+        const show = () => { buildPanel(); console.log('[WSS] panel ready'); };
+        let ready = false;
+        try { ready = !!(sdk.State && sdk.State.isReady && sdk.State.isReady()); } catch (e) { /* ignore */ }
+        if (ready) show();
+        else sdk.Events.once({ eventName: 'wme-ready' }).then(show);
     }
-
     // SDK_INITIALIZED may not exist yet if this script runs before WME sets it up.
     let tries = 0;
     (function waitForSdk() {
